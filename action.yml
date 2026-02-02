@@ -1,0 +1,270 @@
+name: 'Bino CLI'
+description: 'Install and run bino-cli for linting and building reports'
+author: 'bino-bi'
+
+branding:
+  icon: 'file-text'
+  color: 'blue'
+
+inputs:
+  version:
+    description: 'Version of bino-cli to install (e.g., "v1.0.0" or "latest")'
+    required: false
+    default: 'latest'
+
+  command:
+    description: 'Command to run: "lint", "build", or "both"'
+    required: true
+
+  work-dir:
+    description: 'Working directory containing report manifests'
+    required: false
+    default: '.'
+
+  cache:
+    description: 'Cache bino CLI and browser runtime between runs'
+    required: false
+    default: 'true'
+
+  # Lint-specific inputs
+  fail-on-warnings:
+    description: 'Exit with non-zero code if lint warnings are found'
+    required: false
+    default: 'true'
+
+  execute-queries:
+    description: 'Execute dataset queries during lint to validate data'
+    required: false
+    default: 'false'
+
+  # Build-specific inputs
+  out-dir:
+    description: 'Output directory for build artifacts (relative to work-dir)'
+    required: false
+    default: 'dist'
+
+  artefacts:
+    description: 'Comma-separated list of artefact names to build (empty for all)'
+    required: false
+    default: ''
+
+  exclude-artefacts:
+    description: 'Comma-separated list of artefact names to exclude from build'
+    required: false
+    default: ''
+
+  browser:
+    description: 'Browser engine for PDF rendering: chromium, firefox, or webkit'
+    required: false
+    default: 'chromium'
+
+  data-validation:
+    description: 'Data validation mode: fail, warn, or off'
+    required: false
+    default: 'warn'
+
+  log-format:
+    description: 'Log format: text or json'
+    required: false
+    default: 'text'
+
+  no-lint:
+    description: 'Skip lint during build'
+    required: false
+    default: 'false'
+
+outputs:
+  version:
+    description: 'Installed bino-cli version'
+    value: ${{ steps.install.outputs.version }}
+
+  lint-log:
+    description: 'Path to lint log file (if lint was run)'
+    value: ${{ steps.lint.outputs.log-file }}
+
+  build-log:
+    description: 'Path to build log file (if build was run)'
+    value: ${{ steps.build.outputs.log-file }}
+
+  cache-hit:
+    description: 'Whether the cache was hit'
+    value: ${{ steps.cache.outputs.cache-hit }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Compute cache key
+      id: cache-key
+      shell: bash
+      env:
+        BINO_VERSION: ${{ inputs.version }}
+        BROWSER: ${{ inputs.browser }}
+      run: |
+        # Create a cache key based on version, browser, and OS
+        echo "key=bino-${{ runner.os }}-${BINO_VERSION}-${BROWSER}" >> $GITHUB_OUTPUT
+
+    - name: Restore cache
+      id: cache
+      if: ${{ inputs.cache == 'true' }}
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.local/bin/bino
+          ~/.bn
+        key: ${{ steps.cache-key.outputs.key }}
+
+    - name: Install bino-cli
+      id: install
+      shell: bash
+      env:
+        BINO_VERSION: ${{ inputs.version }}
+        CACHE_HIT: ${{ steps.cache.outputs.cache-hit }}
+      run: |
+        echo "::group::Installing bino-cli"
+
+        # Add to PATH for subsequent steps
+        echo "$HOME/.local/bin" >> $GITHUB_PATH
+        export PATH="$HOME/.local/bin:$PATH"
+
+        # Check if already installed from cache
+        if [ "$CACHE_HIT" = "true" ] && [ -f "$HOME/.local/bin/bino" ]; then
+          INSTALLED_VERSION=$("$HOME/.local/bin/bino" --version | head -n1 || echo "unknown")
+          echo "version=$INSTALLED_VERSION" >> $GITHUB_OUTPUT
+          echo "bino-cli restored from cache: $INSTALLED_VERSION"
+          echo "::endgroup::"
+          exit 0
+        fi
+
+        # Download and run install script
+        curl -fsSL https://github.com/bino-bi/bino-cli-releases/releases/latest/download/install.sh -o /tmp/install-bino.sh
+        chmod +x /tmp/install-bino.sh
+
+        # Determine version flag
+        VERSION_FLAG=""
+        if [ "$BINO_VERSION" != "latest" ]; then
+          VERSION_FLAG="--tag $BINO_VERSION"
+        fi
+
+        # Install with non-interactive mode
+        /tmp/install-bino.sh --yes $VERSION_FLAG
+
+        # Output installed version
+        INSTALLED_VERSION=$("$HOME/.local/bin/bino" --version | head -n1 || echo "unknown")
+        echo "version=$INSTALLED_VERSION" >> $GITHUB_OUTPUT
+        echo "Installed bino-cli: $INSTALLED_VERSION"
+
+        echo "::endgroup::"
+
+    - name: Setup browser runtime
+      shell: bash
+      env:
+        BROWSER: ${{ inputs.browser }}
+        CACHE_HIT: ${{ steps.cache.outputs.cache-hit }}
+      run: |
+        echo "::group::Setting up browser runtime"
+        export PATH="$HOME/.local/bin:$PATH"
+
+        # Check if browser is already cached
+        if [ "$CACHE_HIT" = "true" ] && [ -d "$HOME/.bn/playwright" ]; then
+          echo "Browser runtime restored from cache"
+          # Still run setup to verify, but it should be fast if already present
+        fi
+
+        bino setup --browser "$BROWSER"
+        echo "::endgroup::"
+
+    - name: Run lint
+      id: lint
+      if: ${{ inputs.command == 'lint' || inputs.command == 'both' }}
+      shell: bash
+      env:
+        WORK_DIR: ${{ inputs.work-dir }}
+        FAIL_ON_WARNINGS: ${{ inputs.fail-on-warnings }}
+        EXECUTE_QUERIES: ${{ inputs.execute-queries }}
+        LOG_FORMAT: ${{ inputs.log-format }}
+        OUT_DIR: ${{ inputs.out-dir }}
+      run: |
+        echo "::group::Running bino lint"
+        export PATH="$HOME/.local/bin:$PATH"
+
+        # Build lint command
+        LINT_CMD="bino lint --work-dir \"$WORK_DIR\" --out-dir \"$OUT_DIR\" --log-format \"$LOG_FORMAT\""
+
+        if [ "$FAIL_ON_WARNINGS" = "true" ]; then
+          LINT_CMD="$LINT_CMD --fail-on-warnings"
+        fi
+
+        if [ "$EXECUTE_QUERIES" = "true" ]; then
+          LINT_CMD="$LINT_CMD --execute-queries"
+        fi
+
+        echo "Executing: $LINT_CMD"
+        eval $LINT_CMD
+
+        # Find and output log file path
+        LOG_FILE=$(find "$WORK_DIR/$OUT_DIR" -name "bino-lint-*.${LOG_FORMAT#text}" -type f 2>/dev/null | head -n1 || echo "")
+        if [ -z "$LOG_FILE" ] && [ "$LOG_FORMAT" = "text" ]; then
+          LOG_FILE=$(find "$WORK_DIR/$OUT_DIR" -name "bino-lint-*.log" -type f 2>/dev/null | head -n1 || echo "")
+        fi
+        echo "log-file=$LOG_FILE" >> $GITHUB_OUTPUT
+
+        echo "::endgroup::"
+
+    - name: Run build
+      id: build
+      if: ${{ inputs.command == 'build' || inputs.command == 'both' }}
+      shell: bash
+      env:
+        WORK_DIR: ${{ inputs.work-dir }}
+        OUT_DIR: ${{ inputs.out-dir }}
+        ARTEFACTS: ${{ inputs.artefacts }}
+        EXCLUDE_ARTEFACTS: ${{ inputs.exclude-artefacts }}
+        BROWSER: ${{ inputs.browser }}
+        DATA_VALIDATION: ${{ inputs.data-validation }}
+        LOG_FORMAT: ${{ inputs.log-format }}
+        NO_LINT: ${{ inputs.no-lint }}
+      run: |
+        echo "::group::Running bino build"
+        export PATH="$HOME/.local/bin:$PATH"
+
+        # Build command with base flags
+        BUILD_CMD="bino build --work-dir \"$WORK_DIR\" --out-dir \"$OUT_DIR\" --browser \"$BROWSER\" --data-validation \"$DATA_VALIDATION\" --log-format \"$LOG_FORMAT\""
+
+        # Add artefact filters if specified
+        if [ -n "$ARTEFACTS" ]; then
+          IFS=',' read -ra ARTEFACT_ARRAY <<< "$ARTEFACTS"
+          for artefact in "${ARTEFACT_ARRAY[@]}"; do
+            # Trim whitespace
+            artefact=$(echo "$artefact" | xargs)
+            if [ -n "$artefact" ]; then
+              BUILD_CMD="$BUILD_CMD --artefact \"$artefact\""
+            fi
+          done
+        fi
+
+        if [ -n "$EXCLUDE_ARTEFACTS" ]; then
+          IFS=',' read -ra EXCLUDE_ARRAY <<< "$EXCLUDE_ARTEFACTS"
+          for artefact in "${EXCLUDE_ARRAY[@]}"; do
+            # Trim whitespace
+            artefact=$(echo "$artefact" | xargs)
+            if [ -n "$artefact" ]; then
+              BUILD_CMD="$BUILD_CMD --exclude-artefact \"$artefact\""
+            fi
+          done
+        fi
+
+        if [ "$NO_LINT" = "true" ]; then
+          BUILD_CMD="$BUILD_CMD --no-lint"
+        fi
+
+        echo "Executing: $BUILD_CMD"
+        eval $BUILD_CMD
+
+        # Find and output log file path
+        LOG_FILE=$(find "$WORK_DIR/$OUT_DIR" -name "bino-build-*.${LOG_FORMAT#text}" -type f 2>/dev/null | head -n1 || echo "")
+        if [ -z "$LOG_FILE" ] && [ "$LOG_FORMAT" = "text" ]; then
+          LOG_FILE=$(find "$WORK_DIR/$OUT_DIR" -name "bino-build-*.log" -type f 2>/dev/null | head -n1 || echo "")
+        fi
+        echo "log-file=$LOG_FILE" >> $GITHUB_OUTPUT
+
+        echo "::endgroup::"
