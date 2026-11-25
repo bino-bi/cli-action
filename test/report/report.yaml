@@ -1,0 +1,17 @@
+apiVersion: bino.bi/v1alpha1
+kind: ReportArtefact
+metadata:
+  name: smoke
+spec:
+  format: xga
+  orientation: portrait
+  language: en
+  filename: smoke.pdf
+  title: "Smoke"
+  author: "Rainbow Reporting Team"
+  keywords:
+    - sample
+    - bino
+    - report
+  layoutPages:
+    - smoke-page

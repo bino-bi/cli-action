@@ -2,6 +2,14 @@
 
 A GitHub Action to install and run [bino-cli](https://github.com/bino-bi/bino-cli) for linting and building reports.
 
+It runs on Linux and macOS runners.
+
+## Pin the bino version
+
+Always set `version`. With `latest`, every new bino release can change your build without a change in your repository, so a report from last month cannot be built again in the same way. The action prints a warning when `version` is `latest`, and the warning names the release it used.
+
+The downloaded binary is checked against the `checksums.txt` of that release.
+
 ## Usage
 
 ### Lint on Pull Requests
@@ -20,8 +28,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Lint bino reports
-        uses: bino-bi/cli-action@v1
+        uses: bino-bi/cli-action@v2
         with:
+          version: v0.120.0
           command: lint
           fail-on-warnings: 'true'
 ```
@@ -42,8 +51,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Build all reports
-        uses: bino-bi/cli-action@v1
+        uses: bino-bi/cli-action@v2
         with:
+          version: v0.120.0
           command: build
 
       - name: Upload artifacts
@@ -57,8 +67,9 @@ jobs:
 
 ```yaml
 - name: Build selected reports
-  uses: bino-bi/cli-action@v1
+  uses: bino-bi/cli-action@v2
   with:
+    version: v0.120.0
     command: build
     artefacts: 'monthly-report, weekly-summary'
     exclude-artefacts: 'draft-report'
@@ -68,65 +79,71 @@ jobs:
 
 ```yaml
 - name: Lint and build
-  uses: bino-bi/cli-action@v1
+  uses: bino-bi/cli-action@v2
   with:
+    version: v0.120.0
     command: both
     fail-on-warnings: 'true'
     out-dir: output
 ```
 
-### Pin CLI Version
+### Pin the Template Engine
+
+The best place for the engine version is `engine-version` in your `bino.toml`. bino then uses that engine on every machine. The `engine-version` input only decides which engine the action installs in advance:
 
 ```yaml
-- name: Build with specific version
-  uses: bino-bi/cli-action@v1
+- name: Build with a fixed engine
+  uses: bino-bi/cli-action@v2
   with:
+    version: v0.120.0
     command: build
-    version: 'v1.2.3'
+    engine-version: v1.0.0-next.87
 ```
+
+### Projects with Registry Packages
+
+When the work dir has a `bino.lock`, the action runs `bino registry install` before lint and build, so the packages are restored exactly as locked. Set `registry-install: 'false'` to skip this step.
 
 ## Inputs
 
 | Input | Description | Required | Default |
 |-------|-------------|----------|---------|
-| `version` | Version of bino-cli to install (e.g., `v1.0.0` or `latest`) | No | `latest` |
+| `version` | bino-cli release to install, e.g. `v0.120.0`. `latest` works but prints a warning | No | `latest` |
 | `command` | Command to run: `lint`, `build`, or `both` | **Yes** | - |
 | `work-dir` | Working directory containing report manifests | No | `.` |
-| `cache` | Cache bino CLI and browser runtime between runs | No | `true` |
+| `cache` | Cache the bino binary, Chrome headless shell and template engine between runs | No | `true` |
+| `engine-version` | Template engine version to install for build. Empty installs the newest one. A pin in `bino.toml` wins at build time | No | (newest) |
+| `registry-install` | Run `bino registry install` when the work dir has a `bino.lock` | No | `true` |
 | `fail-on-warnings` | Exit with non-zero code if lint warnings are found | No | `true` |
 | `execute-queries` | Execute dataset queries during lint to validate data | No | `false` |
-| `out-dir` | Output directory for build artifacts (relative to work-dir) | No | `dist` |
+| `out-dir` | Output directory for build artifacts and log files (relative to work-dir) | No | `dist` |
 | `artefacts` | Comma-separated list of artefact names to build | No | (all) |
 | `exclude-artefacts` | Comma-separated list of artefact names to exclude | No | (none) |
-| `browser` | Browser engine: `chromium`, `firefox`, or `webkit` | No | `chromium` |
 | `data-validation` | Data validation mode: `fail`, `warn`, or `off` | No | `warn` |
-| `log-format` | Log format: `text` or `json` | No | `text` |
+| `log-format` | Format of the lint and build log files: `text` or `json` | No | `text` |
 | `no-lint` | Skip lint during build | No | `false` |
+
+`command: lint` does not download Chrome or the template engine. Lint does not need them.
 
 ## Outputs
 
 | Output | Description |
 |--------|-------------|
-| `version` | Installed bino-cli version |
+| `version` | Installed bino-cli version, as printed by `bino version` |
 | `lint-log` | Path to lint log file (if lint was run) |
 | `build-log` | Path to build log file (if build was run) |
 | `cache-hit` | Whether the cache was hit (`true` or `false`) |
 
 ## Caching
 
-By default, the action caches the bino CLI binary and browser runtime (`~/.local/bin/bino` and `~/.bn/`) to speed up subsequent runs. The cache key is based on:
-
-- Runner OS
-- CLI version
-- Browser type
-
-On cache hit, the installation and browser setup steps are skipped, which can save significant time (browser downloads are ~100MB+).
+By default, the action caches the bino binary (`~/.local/bin/bino`), Chrome headless shell (`~/.bino/chrome-headless-shell`) and the template engine (`~/.bino/cdn`). The cache key contains the runner OS and architecture, the bino version, the command and the `engine-version` input. With `version: latest` the key uses the release that `latest` resolved to, so a new release never reuses an old binary.
 
 To disable caching:
 
 ```yaml
-- uses: bino-bi/cli-action@v1
+- uses: bino-bi/cli-action@v2
   with:
+    version: v0.120.0
     command: lint
     cache: 'false'
 ```
@@ -151,8 +168,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Lint reports
-        uses: bino-bi/cli-action@v1
+        uses: bino-bi/cli-action@v2
         with:
+          version: v0.120.0
           command: lint
           fail-on-warnings: 'true'
           execute-queries: 'true'
@@ -165,8 +183,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Build reports
-        uses: bino-bi/cli-action@v1
+        uses: bino-bi/cli-action@v2
         with:
+          version: v0.120.0
           command: build
           no-lint: 'true'  # Already linted in previous job
 
@@ -183,26 +202,38 @@ jobs:
 ```yaml
 - name: Build with JSON logs
   id: build
-  uses: bino-bi/cli-action@v1
+  uses: bino-bi/cli-action@v2
   with:
+    version: v0.120.0
     command: build
     log-format: json
 
 - name: Parse build results
-  run: |
-    cat "${{ steps.build.outputs.build-log }}" | jq '.artefacts'
+  run: jq '.artefacts' "${{ steps.build.outputs.build-log }}"
 ```
 
 ### Custom Working Directory
 
 ```yaml
 - name: Build reports from subdirectory
-  uses: bino-bi/cli-action@v1
+  uses: bino-bi/cli-action@v2
   with:
+    version: v0.120.0
     command: build
     work-dir: './reports/monthly'
     out-dir: 'output'
 ```
+
+## Upgrading from v1
+
+- The `browser` input is gone. bino renders with Chrome headless shell only.
+- `log-format` now sets the format of the lint and build log files.
+- `engine-version` and `registry-install` are new.
+- Windows runners are not supported.
+
+## Development
+
+`.github/workflows/test.yml` runs the action against the small reports in `test/`: on every pull request, and every week with the newest bino release. When that weekly run fails, a new bino release has broken the action.
 
 ## License
 
