@@ -1,0 +1,116 @@
+name: Test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    # Weekly, so a new bino release that breaks the action shows up here.
+    - cron: '17 5 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PINNED_VERSION: v0.123.0
+
+jobs:
+  pinned:
+    name: ${{ matrix.command }} (pinned, cache ${{ matrix.cache }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        command: [lint, build, both]
+        cache: ['true', 'false']
+    steps:
+      - uses: actions/checkout@v4
+      - id: bino
+        uses: ./
+        with:
+          version: ${{ env.PINNED_VERSION }}
+          command: ${{ matrix.command }}
+          cache: ${{ matrix.cache }}
+          work-dir: test/report
+      - name: Check results
+        shell: bash
+        env:
+          COMMAND: ${{ matrix.command }}
+          VERSION: ${{ steps.bino.outputs.version }}
+          LINT_LOG: ${{ steps.bino.outputs.lint-log }}
+          BUILD_LOG: ${{ steps.bino.outputs.build-log }}
+        run: |
+          echo "version output: $VERSION"
+          echo "$VERSION" | grep -q "^bino ${PINNED_VERSION#v} "
+          if [ "$COMMAND" != build ]; then test -s "$LINT_LOG"; fi
+          if [ "$COMMAND" != lint ]; then
+            test -s "$BUILD_LOG"
+            test -s test/report/dist/smoke.pdf
+          fi
+
+  latest:
+    name: ${{ matrix.command }} (newest bino release)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        command: [lint, build, both]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./
+        with:
+          version: latest
+          command: ${{ matrix.command }}
+          cache: 'false'
+          work-dir: test/report
+      - name: Check results
+        if: ${{ matrix.command != 'lint' }}
+        run: test -s test/report/dist/smoke.pdf
+
+  engine-and-json:
+    name: unpinned report with engine-version input and json logs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: bino
+        uses: ./
+        with:
+          version: ${{ env.PINNED_VERSION }}
+          command: both
+          engine-version: v1.0.0-next.87
+          log-format: json
+          execute-queries: 'true'
+          work-dir: test/unpinned
+      - name: Check results
+        env:
+          LINT_LOG: ${{ steps.bino.outputs.lint-log }}
+          BUILD_LOG: ${{ steps.bino.outputs.build-log }}
+        run: |
+          case "$LINT_LOG" in *.json) ;; *) echo "lint log is not json: $LINT_LOG"; exit 1 ;; esac
+          case "$BUILD_LOG" in *.json) ;; *) echo "build log is not json: $BUILD_LOG"; exit 1 ;; esac
+          test -d ~/.bino/cdn/bn-template-engine/v1.0.0-next.87
+          test -s test/unpinned/dist/smoke.pdf
+
+  broken:
+    name: lint fails on a broken report
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: bino
+        continue-on-error: true
+        uses: ./
+        with:
+          version: ${{ env.PINNED_VERSION }}
+          command: lint
+          cache: 'false'
+          work-dir: test/broken
+      - name: Expect a lint failure
+        env:
+          OUTCOME: ${{ steps.bino.outcome }}
+          LINT_LOG: ${{ steps.bino.outputs.lint-log }}
+        run: |
+          echo "outcome: $OUTCOME, lint log: $LINT_LOG"
+          test "$OUTCOME" = failure
+          # The log exists only when lint itself ran, so install or setup errors do not count.
+          test -s "$LINT_LOG"

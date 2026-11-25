@@ -8,7 +8,7 @@ branding:
 
 inputs:
   version:
-    description: 'Version of bino-cli to install (e.g., "v1.0.0" or "latest")'
+    description: 'bino-cli release to install, e.g. "v0.120.0". "latest" works, but the build is then not reproducible.'
     required: false
     default: 'latest'
 
@@ -22,7 +22,17 @@ inputs:
     default: '.'
 
   cache:
-    description: 'Cache bino CLI and browser runtime between runs'
+    description: 'Cache the bino binary, Chrome headless shell and template engine between runs'
+    required: false
+    default: 'true'
+
+  engine-version:
+    description: 'Template engine version to install for build, e.g. "v1.0.0-next.87". Leave it empty when bino.toml pins engine-version; bino build then downloads that one.'
+    required: false
+    default: ''
+
+  registry-install:
+    description: 'Run "bino registry install" before lint and build when the work dir has a bino.lock'
     required: false
     default: 'true'
 
@@ -39,7 +49,7 @@ inputs:
 
   # Build-specific inputs
   out-dir:
-    description: 'Output directory for build artifacts (relative to work-dir)'
+    description: 'Output directory for build artifacts and log files (relative to work-dir)'
     required: false
     default: 'dist'
 
@@ -53,18 +63,13 @@ inputs:
     required: false
     default: ''
 
-  browser:
-    description: 'Browser engine for PDF rendering: chromium, firefox, or webkit'
-    required: false
-    default: 'chromium'
-
   data-validation:
     description: 'Data validation mode: fail, warn, or off'
     required: false
     default: 'warn'
 
   log-format:
-    description: 'Log format: text or json'
+    description: 'Format of the lint and build log files: text or json'
     required: false
     default: 'text'
 
@@ -87,90 +92,147 @@ outputs:
     value: ${{ steps.build.outputs.log-file }}
 
   cache-hit:
-    description: 'Whether the cache was hit'
+    description: 'Whether the bino binary was restored from the cache (empty when cache is off)'
     value: ${{ steps.cache.outputs.cache-hit }}
 
 runs:
   using: 'composite'
   steps:
-    - name: Compute cache key
-      id: cache-key
+    - name: Resolve bino version
+      id: resolve
       shell: bash
       env:
         BINO_VERSION: ${{ inputs.version }}
-        BROWSER: ${{ inputs.browser }}
+        COMMAND: ${{ inputs.command }}
       run: |
-        # Create a cache key based on version, browser, and OS
-        echo "key=bino-${{ runner.os }}-${BINO_VERSION}-${BROWSER}" >> $GITHUB_OUTPUT
+        case "$COMMAND" in
+          lint|build|both) ;;
+          *) echo "::error::command must be lint, build or both, got '$COMMAND'"; exit 1 ;;
+        esac
+        case "$RUNNER_OS" in
+          Linux|macOS) ;;
+          *) echo "::error::this action supports Linux and macOS runners only"; exit 1 ;;
+        esac
 
-    - name: Restore cache
+        if [ -z "$BINO_VERSION" ] || [ "$BINO_VERSION" = "latest" ]; then
+          URL=$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/bino-bi/bino-cli-releases/releases/latest)
+          TAG="${URL##*/}"
+          echo "::warning title=bino version not pinned::version is 'latest' and resolved to $TAG. The next bino release can change this build. Pin it for a reproducible build: 'version: $TAG'."
+        else
+          TAG="v${BINO_VERSION#v}"
+        fi
+
+        echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+        echo "Using bino $TAG"
+
+    - name: Restore bino binary
       id: cache
       if: ${{ inputs.cache == 'true' }}
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
-        path: |
-          ~/.local/bin/bino
-          ~/.bn
-        key: ${{ steps.cache-key.outputs.key }}
+        path: ~/.local/bin/bino
+        key: bino-bin-${{ runner.os }}-${{ runner.arch }}-${{ steps.resolve.outputs.tag }}
 
     - name: Install bino-cli
       id: install
       shell: bash
       env:
-        BINO_VERSION: ${{ inputs.version }}
-        CACHE_HIT: ${{ steps.cache.outputs.cache-hit }}
+        TAG: ${{ steps.resolve.outputs.tag }}
       run: |
-        echo "::group::Installing bino-cli"
+        echo "::group::Installing bino-cli $TAG"
+        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        # CI=1 turns off bino's update check.
+        echo "CI=1" >> "$GITHUB_ENV"
+        export PATH="$HOME/.local/bin:$PATH" CI=1
 
-        # Add to PATH for subsequent steps
-        echo "$HOME/.local/bin" >> $GITHUB_PATH
-        export PATH="$HOME/.local/bin:$PATH"
+        if [ -x "$HOME/.local/bin/bino" ] && bino version | grep -q "^bino ${TAG#v} "; then
+          echo "bino $TAG restored from cache"
+        else
+          case "$RUNNER_ARCH" in
+            X64) ARCH=x86_64 ;;
+            ARM64) ARCH=arm64 ;;
+            *) echo "::error::unsupported runner architecture $RUNNER_ARCH"; exit 1 ;;
+          esac
+          OS=Linux
+          if [ "$RUNNER_OS" = "macOS" ]; then OS=Darwin; fi
+          ASSET="bino-cli_${OS}_${ARCH}.tar.gz"
+          BASE="https://github.com/bino-bi/bino-cli-releases/releases/download/$TAG"
+          TMP=$(mktemp -d)
 
-        # Check if already installed from cache
-        if [ "$CACHE_HIT" = "true" ] && [ -f "$HOME/.local/bin/bino" ]; then
-          INSTALLED_VERSION=$("$HOME/.local/bin/bino" --version | head -n1 || echo "unknown")
-          echo "version=$INSTALLED_VERSION" >> $GITHUB_OUTPUT
-          echo "bino-cli restored from cache: $INSTALLED_VERSION"
-          echo "::endgroup::"
-          exit 0
+          curl -fsSL -o "$TMP/$ASSET" "$BASE/$ASSET"
+          curl -fsSL -o "$TMP/checksums.txt" "$BASE/checksums.txt"
+          EXPECTED=$(awk -v a="$ASSET" '$2 == a {print $1}' "$TMP/checksums.txt")
+          if [ -z "$EXPECTED" ]; then
+            echo "::error::$ASSET is not listed in checksums.txt of $TAG"; exit 1
+          fi
+          if command -v sha256sum >/dev/null; then
+            ACTUAL=$(sha256sum "$TMP/$ASSET" | awk '{print $1}')
+          else
+            ACTUAL=$(shasum -a 256 "$TMP/$ASSET" | awk '{print $1}')
+          fi
+          if [ "$EXPECTED" != "$ACTUAL" ]; then
+            echo "::error::checksum mismatch for $ASSET (expected $EXPECTED, got $ACTUAL)"; exit 1
+          fi
+
+          tar -xzf "$TMP/$ASSET" -C "$TMP"
+          mkdir -p "$HOME/.local/bin"
+          install -m 0755 "$TMP/bino" "$HOME/.local/bin/bino"
+          rm -rf "$TMP"
         fi
 
-        # Download and run install script
-        curl -fsSL https://github.com/bino-bi/bino-cli-releases/releases/latest/download/install.sh -o /tmp/install-bino.sh
-        chmod +x /tmp/install-bino.sh
-
-        # Determine version flag
-        VERSION_FLAG=""
-        if [ "$BINO_VERSION" != "latest" ]; then
-          VERSION_FLAG="--tag $BINO_VERSION"
-        fi
-
-        # Install with non-interactive mode
-        /tmp/install-bino.sh --yes $VERSION_FLAG
-
-        # Output installed version
-        INSTALLED_VERSION=$("$HOME/.local/bin/bino" --version | head -n1 || echo "unknown")
-        echo "version=$INSTALLED_VERSION" >> $GITHUB_OUTPUT
-        echo "Installed bino-cli: $INSTALLED_VERSION"
-
+        INSTALLED=$(bino version | head -n1)
+        echo "version=$INSTALLED" >> "$GITHUB_OUTPUT"
+        echo "Installed: $INSTALLED"
         echo "::endgroup::"
 
-    - name: Setup browser runtime
+    - name: Resolve Chrome version
+      id: chrome
+      if: ${{ inputs.cache == 'true' && (inputs.command == 'build' || inputs.command == 'both') }}
+      shell: bash
+      run: |
+        # bino setup always installs the newest stable Chrome, so the cache key follows it.
+        VERSION=$(bino setup --dry-run 2>/dev/null | sed -n 's/^ *Version: *//p' | head -n1) || true
+        echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+    - name: Restore Chrome
+      if: ${{ steps.chrome.outputs.version != '' }}
+      uses: actions/cache@v5
+      with:
+        path: ~/.bino/chrome-headless-shell
+        key: bino-chrome-${{ runner.os }}-${{ runner.arch }}-${{ steps.chrome.outputs.version }}
+
+    - name: Restore template engine
+      if: ${{ inputs.cache == 'true' && (inputs.command == 'build' || inputs.command == 'both') }}
+      uses: actions/cache@v5
+      with:
+        path: ~/.bino/cdn
+        key: bino-engine-${{ runner.os }}-${{ inputs.engine-version }}-${{ hashFiles(format('{0}/bino.toml', inputs.work-dir)) }}
+
+    - name: Set up Chrome and template engine
+      if: ${{ inputs.command == 'build' || inputs.command == 'both' }}
       shell: bash
       env:
-        BROWSER: ${{ inputs.browser }}
-        CACHE_HIT: ${{ steps.cache.outputs.cache-hit }}
+        ENGINE_VERSION: ${{ inputs.engine-version }}
+        WORK_DIR: ${{ inputs.work-dir }}
       run: |
-        echo "::group::Setting up browser runtime"
-        export PATH="$HOME/.local/bin:$PATH"
-
-        # Check if browser is already cached
-        if [ "$CACHE_HIT" = "true" ] && [ -d "$HOME/.bn/playwright" ]; then
-          echo "Browser runtime restored from cache"
-          # Still run setup to verify, but it should be fast if already present
+        echo "::group::Setting up Chrome and template engine"
+        bino setup --quiet
+        # A pin in bino.toml is downloaded by bino build itself. Without any pin,
+        # "bino setup --template-engine" would pick an old, incompatible engine.
+        if [ -n "$ENGINE_VERSION" ]; then
+          bino setup --quiet --template-engine --engine-version "$ENGINE_VERSION"
+        elif ! grep -Eq '^[[:space:]]*engine-version[[:space:]]*=' "$WORK_DIR/bino.toml" 2>/dev/null; then
+          echo "::warning title=template engine not pinned::$WORK_DIR/bino.toml has no engine-version. Pin it there (for example engine-version = \"v1.0.0-next.88\") or set the engine-version input."
         fi
+        echo "::endgroup::"
 
-        bino setup --browser "$BROWSER"
+    - name: Install registry packages
+      if: ${{ inputs.registry-install == 'true' && hashFiles(format('{0}/bino.lock', inputs.work-dir)) != '' }}
+      shell: bash
+      working-directory: ${{ inputs.work-dir }}
+      run: |
+        echo "::group::Running bino registry install"
+        bino registry install
         echo "::endgroup::"
 
     - name: Run lint
@@ -185,30 +247,22 @@ runs:
         OUT_DIR: ${{ inputs.out-dir }}
       run: |
         echo "::group::Running bino lint"
-        export PATH="$HOME/.local/bin:$PATH"
+        ARGS=(lint --work-dir "$WORK_DIR" --out-dir "$OUT_DIR" --lint-log-format "$LOG_FORMAT")
+        if [ "$FAIL_ON_WARNINGS" = "true" ]; then ARGS+=(--fail-on-warnings); fi
+        if [ "$EXECUTE_QUERIES" = "true" ]; then ARGS+=(--execute-queries); fi
 
-        # Build lint command
-        LINT_CMD="bino lint --work-dir \"$WORK_DIR\" --out-dir \"$OUT_DIR\" --log-format \"$LOG_FORMAT\""
+        echo "Executing: bino ${ARGS[*]}"
+        MARK=$(mktemp)
+        STATUS=0
+        bino "${ARGS[@]}" || STATUS=$?
 
-        if [ "$FAIL_ON_WARNINGS" = "true" ]; then
-          LINT_CMD="$LINT_CMD --fail-on-warnings"
-        fi
-
-        if [ "$EXECUTE_QUERIES" = "true" ]; then
-          LINT_CMD="$LINT_CMD --execute-queries"
-        fi
-
-        echo "Executing: $LINT_CMD"
-        eval $LINT_CMD
-
-        # Find and output log file path
-        LOG_FILE=$(find "$WORK_DIR/$OUT_DIR" -name "bino-lint-*.${LOG_FORMAT#text}" -type f 2>/dev/null | head -n1 || echo "")
-        if [ -z "$LOG_FILE" ] && [ "$LOG_FORMAT" = "text" ]; then
-          LOG_FILE=$(find "$WORK_DIR/$OUT_DIR" -name "bino-lint-*.log" -type f 2>/dev/null | head -n1 || echo "")
-        fi
-        echo "log-file=$LOG_FILE" >> $GITHUB_OUTPUT
-
+        EXT=log
+        if [ "$LOG_FORMAT" = "json" ]; then EXT=json; fi
+        LOG_FILE=$(find "$WORK_DIR/$OUT_DIR" -maxdepth 1 -name "bino-lint-*.$EXT" -newer "$MARK" 2>/dev/null | head -n1 || true)
+        rm -f "$MARK"
+        echo "log-file=$LOG_FILE" >> "$GITHUB_OUTPUT"
         echo "::endgroup::"
+        exit $STATUS
 
     - name: Run build
       id: build
@@ -219,52 +273,34 @@ runs:
         OUT_DIR: ${{ inputs.out-dir }}
         ARTEFACTS: ${{ inputs.artefacts }}
         EXCLUDE_ARTEFACTS: ${{ inputs.exclude-artefacts }}
-        BROWSER: ${{ inputs.browser }}
         DATA_VALIDATION: ${{ inputs.data-validation }}
         LOG_FORMAT: ${{ inputs.log-format }}
         NO_LINT: ${{ inputs.no-lint }}
       run: |
         echo "::group::Running bino build"
-        export PATH="$HOME/.local/bin:$PATH"
+        ARGS=(build --work-dir "$WORK_DIR" --out-dir "$OUT_DIR" --data-validation "$DATA_VALIDATION" --build-log-format "$LOG_FORMAT")
 
-        # Build command with base flags
-        BUILD_CMD="bino build --work-dir \"$WORK_DIR\" --out-dir \"$OUT_DIR\" --browser \"$BROWSER\" --data-validation \"$DATA_VALIDATION\" --log-format \"$LOG_FORMAT\""
+        IFS=',' read -ra LIST <<< "$ARTEFACTS"
+        for a in "${LIST[@]}"; do
+          a=$(echo "$a" | xargs)
+          if [ -n "$a" ]; then ARGS+=(--artefact "$a"); fi
+        done
+        IFS=',' read -ra LIST <<< "$EXCLUDE_ARTEFACTS"
+        for a in "${LIST[@]}"; do
+          a=$(echo "$a" | xargs)
+          if [ -n "$a" ]; then ARGS+=(--exclude-artefact "$a"); fi
+        done
+        if [ "$NO_LINT" = "true" ]; then ARGS+=(--no-lint); fi
 
-        # Add artefact filters if specified
-        if [ -n "$ARTEFACTS" ]; then
-          IFS=',' read -ra ARTEFACT_ARRAY <<< "$ARTEFACTS"
-          for artefact in "${ARTEFACT_ARRAY[@]}"; do
-            # Trim whitespace
-            artefact=$(echo "$artefact" | xargs)
-            if [ -n "$artefact" ]; then
-              BUILD_CMD="$BUILD_CMD --artefact \"$artefact\""
-            fi
-          done
-        fi
+        echo "Executing: bino ${ARGS[*]}"
+        MARK=$(mktemp)
+        STATUS=0
+        bino "${ARGS[@]}" || STATUS=$?
 
-        if [ -n "$EXCLUDE_ARTEFACTS" ]; then
-          IFS=',' read -ra EXCLUDE_ARRAY <<< "$EXCLUDE_ARTEFACTS"
-          for artefact in "${EXCLUDE_ARRAY[@]}"; do
-            # Trim whitespace
-            artefact=$(echo "$artefact" | xargs)
-            if [ -n "$artefact" ]; then
-              BUILD_CMD="$BUILD_CMD --exclude-artefact \"$artefact\""
-            fi
-          done
-        fi
-
-        if [ "$NO_LINT" = "true" ]; then
-          BUILD_CMD="$BUILD_CMD --no-lint"
-        fi
-
-        echo "Executing: $BUILD_CMD"
-        eval $BUILD_CMD
-
-        # Find and output log file path
-        LOG_FILE=$(find "$WORK_DIR/$OUT_DIR" -name "bino-build-*.${LOG_FORMAT#text}" -type f 2>/dev/null | head -n1 || echo "")
-        if [ -z "$LOG_FILE" ] && [ "$LOG_FORMAT" = "text" ]; then
-          LOG_FILE=$(find "$WORK_DIR/$OUT_DIR" -name "bino-build-*.log" -type f 2>/dev/null | head -n1 || echo "")
-        fi
-        echo "log-file=$LOG_FILE" >> $GITHUB_OUTPUT
-
+        EXT=log
+        if [ "$LOG_FORMAT" = "json" ]; then EXT=json; fi
+        LOG_FILE=$(find "$WORK_DIR/$OUT_DIR" -maxdepth 1 -name "bino-build-*.$EXT" -newer "$MARK" 2>/dev/null | head -n1 || true)
+        rm -f "$MARK"
+        echo "log-file=$LOG_FILE" >> "$GITHUB_OUTPUT"
         echo "::endgroup::"
+        exit $STATUS
