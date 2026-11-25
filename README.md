@@ -134,11 +134,16 @@ When the work dir has a `bino.lock`, the action runs `bino registry install` bef
 | `version` | Installed bino-cli version, as printed by `bino version` |
 | `lint-log` | Path to lint log file (if lint was run) |
 | `build-log` | Path to build log file (if build was run) |
-| `cache-hit` | Whether the cache was hit (`true` or `false`) |
+| `cache-hit` | Whether the bino binary came from the cache (`true` or `false`; empty with `cache: 'false'`) |
 
 ## Caching
 
-By default, the action caches the bino binary (`~/.local/bin/bino`), Chrome headless shell (`~/.bino/chrome-headless-shell`) and the template engines (`~/.bino/cdn`). The cache key contains the runner OS and architecture, the bino version, the command and the `engine-version` input. With `version: latest` the key uses the release that `latest` resolved to, so a new release never reuses an old binary.
+By default, the action uses two caches:
+
+- The bino binary (`~/.local/bin/bino`), keyed by OS, architecture and bino version. With `version: latest` the key uses the release that `latest` resolved to, so a new release never reuses an old binary.
+- For `build` and `both` only: Chrome headless shell (`~/.bino/chrome-headless-shell`) and the template engines (`~/.bino/cdn`). The key contains the Chrome version, the `engine-version` input and a hash of `bino.toml`, so a new engine pin is saved into a new cache entry.
+
+`bino setup` always installs the newest stable Chrome; bino has no option to fix the Chrome version. So two builds with the same bino version and engine pin can still render with different Chrome versions. If you need the renderer fixed too, build with the container image `ghcr.io/bino-bi/bino-cli:<version>`.
 
 To disable caching:
 

@@ -92,7 +92,7 @@ outputs:
     value: ${{ steps.build.outputs.log-file }}
 
   cache-hit:
-    description: 'Whether the cache was hit'
+    description: 'Whether the bino binary was restored from the cache (empty when cache is off)'
     value: ${{ steps.cache.outputs.cache-hit }}
 
 runs:
@@ -125,16 +125,13 @@ runs:
         echo "tag=$TAG" >> "$GITHUB_OUTPUT"
         echo "Using bino $TAG"
 
-    - name: Restore cache
+    - name: Restore bino binary
       id: cache
       if: ${{ inputs.cache == 'true' }}
       uses: actions/cache@v4
       with:
-        path: |
-          ~/.local/bin/bino
-          ~/.bino/chrome-headless-shell
-          ~/.bino/cdn
-        key: bino-${{ runner.os }}-${{ runner.arch }}-${{ steps.resolve.outputs.tag }}-${{ inputs.command }}-${{ inputs.engine-version }}
+        path: ~/.local/bin/bino
+        key: bino-bin-${{ runner.os }}-${{ runner.arch }}-${{ steps.resolve.outputs.tag }}
 
     - name: Install bino-cli
       id: install
@@ -187,6 +184,27 @@ runs:
         echo "version=$INSTALLED" >> "$GITHUB_OUTPUT"
         echo "Installed: $INSTALLED"
         echo "::endgroup::"
+
+    - name: Resolve Chrome version
+      id: chrome
+      if: ${{ inputs.cache == 'true' && (inputs.command == 'build' || inputs.command == 'both') }}
+      shell: bash
+      run: |
+        # bino setup always installs the newest stable Chrome, so the cache key follows it.
+        VERSION=$(bino setup --dry-run 2>/dev/null | sed -n 's/^ *Version: *//p' | head -n1)
+        echo "version=${VERSION:-unknown}" >> "$GITHUB_OUTPUT"
+
+    - name: Restore Chrome and template engine
+      id: cache-runtime
+      if: ${{ inputs.cache == 'true' && (inputs.command == 'build' || inputs.command == 'both') }}
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.bino/chrome-headless-shell
+          ~/.bino/cdn
+        key: bino-runtime-${{ runner.os }}-${{ runner.arch }}-chrome-${{ steps.chrome.outputs.version }}-${{ inputs.engine-version }}-${{ hashFiles(format('{0}/bino.toml', inputs.work-dir)) }}
+        restore-keys: |
+          bino-runtime-${{ runner.os }}-${{ runner.arch }}-chrome-${{ steps.chrome.outputs.version }}-
 
     - name: Set up Chrome and template engine
       if: ${{ inputs.command == 'build' || inputs.command == 'both' }}

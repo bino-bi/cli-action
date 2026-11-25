@@ -105,9 +105,12 @@ jobs:
           command: lint
           cache: 'false'
           work-dir: test/broken
-      - name: Expect failure
+      - name: Expect a lint failure
         env:
           OUTCOME: ${{ steps.bino.outcome }}
+          LINT_LOG: ${{ steps.bino.outputs.lint-log }}
         run: |
-          echo "outcome: $OUTCOME"
+          echo "outcome: $OUTCOME, lint log: $LINT_LOG"
           test "$OUTCOME" = failure
+          # The log exists only when lint itself ran, so install or setup errors do not count.
+          test -s "$LINT_LOG"
