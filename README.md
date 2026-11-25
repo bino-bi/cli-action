@@ -89,7 +89,9 @@ jobs:
 
 ### Pin the Template Engine
 
-The best place for the engine version is `engine-version` in your `bino.toml`. bino then uses that engine on every machine. The `engine-version` input only decides which engine the action installs in advance:
+Pin the engine with `engine-version` in your `bino.toml`. bino then uses that engine on every machine, and `bino build` downloads it when it is missing. The action warns when `bino.toml` has no pin.
+
+For a project without a pin, set the `engine-version` input. The action then installs that engine before the build:
 
 ```yaml
 - name: Build with a fixed engine
@@ -112,7 +114,7 @@ When the work dir has a `bino.lock`, the action runs `bino registry install` bef
 | `command` | Command to run: `lint`, `build`, or `both` | **Yes** | - |
 | `work-dir` | Working directory containing report manifests | No | `.` |
 | `cache` | Cache the bino binary, Chrome headless shell and template engine between runs | No | `true` |
-| `engine-version` | Template engine version to install for build. Empty installs the newest one. A pin in `bino.toml` wins at build time | No | (newest) |
+| `engine-version` | Template engine version to install for build. Leave it empty when `bino.toml` pins `engine-version` | No | (none) |
 | `registry-install` | Run `bino registry install` when the work dir has a `bino.lock` | No | `true` |
 | `fail-on-warnings` | Exit with non-zero code if lint warnings are found | No | `true` |
 | `execute-queries` | Execute dataset queries during lint to validate data | No | `false` |
@@ -136,7 +138,7 @@ When the work dir has a `bino.lock`, the action runs `bino registry install` bef
 
 ## Caching
 
-By default, the action caches the bino binary (`~/.local/bin/bino`), Chrome headless shell (`~/.bino/chrome-headless-shell`) and the template engine (`~/.bino/cdn`). The cache key contains the runner OS and architecture, the bino version, the command and the `engine-version` input. With `version: latest` the key uses the release that `latest` resolved to, so a new release never reuses an old binary.
+By default, the action caches the bino binary (`~/.local/bin/bino`), Chrome headless shell (`~/.bino/chrome-headless-shell`) and the template engines (`~/.bino/cdn`). The cache key contains the runner OS and architecture, the bino version, the command and the `engine-version` input. With `version: latest` the key uses the release that `latest` resolved to, so a new release never reuses an old binary.
 
 To disable caching:
 

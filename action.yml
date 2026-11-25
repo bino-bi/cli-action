@@ -27,7 +27,7 @@ inputs:
     default: 'true'
 
   engine-version:
-    description: 'Template engine version to install for build, e.g. "v1.0.0-next.87". Empty installs the newest one. An engine-version pin in bino.toml wins at build time.'
+    description: 'Template engine version to install for build, e.g. "v1.0.0-next.87". Leave it empty when bino.toml pins engine-version; bino build then downloads that one.'
     required: false
     default: ''
 
@@ -193,13 +193,16 @@ runs:
       shell: bash
       env:
         ENGINE_VERSION: ${{ inputs.engine-version }}
+        WORK_DIR: ${{ inputs.work-dir }}
       run: |
         echo "::group::Setting up Chrome and template engine"
         bino setup --quiet
+        # A pin in bino.toml is downloaded by bino build itself. Without any pin,
+        # "bino setup --template-engine" would pick an old, incompatible engine.
         if [ -n "$ENGINE_VERSION" ]; then
           bino setup --quiet --template-engine --engine-version "$ENGINE_VERSION"
-        else
-          bino setup --quiet --template-engine
+        elif ! grep -Eq '^[[:space:]]*engine-version[[:space:]]*=' "$WORK_DIR/bino.toml" 2>/dev/null; then
+          echo "::warning title=template engine not pinned::$WORK_DIR/bino.toml has no engine-version. Pin it there (for example engine-version = \"v1.0.0-next.88\") or set the engine-version input."
         fi
         echo "::endgroup::"
 
@@ -229,12 +232,14 @@ runs:
         if [ "$EXECUTE_QUERIES" = "true" ]; then ARGS+=(--execute-queries); fi
 
         echo "Executing: bino ${ARGS[*]}"
+        MARK=$(mktemp)
         STATUS=0
         bino "${ARGS[@]}" || STATUS=$?
 
         EXT=log
         if [ "$LOG_FORMAT" = "json" ]; then EXT=json; fi
-        LOG_FILE=$(ls -t "$WORK_DIR/$OUT_DIR"/bino-lint-*."$EXT" 2>/dev/null | head -n1 || true)
+        LOG_FILE=$(find "$WORK_DIR/$OUT_DIR" -maxdepth 1 -name "bino-lint-*.$EXT" -newer "$MARK" 2>/dev/null | head -n1 || true)
+        rm -f "$MARK"
         echo "log-file=$LOG_FILE" >> "$GITHUB_OUTPUT"
         echo "::endgroup::"
         exit $STATUS
@@ -268,12 +273,14 @@ runs:
         if [ "$NO_LINT" = "true" ]; then ARGS+=(--no-lint); fi
 
         echo "Executing: bino ${ARGS[*]}"
+        MARK=$(mktemp)
         STATUS=0
         bino "${ARGS[@]}" || STATUS=$?
 
         EXT=log
         if [ "$LOG_FORMAT" = "json" ]; then EXT=json; fi
-        LOG_FILE=$(ls -t "$WORK_DIR/$OUT_DIR"/bino-build-*."$EXT" 2>/dev/null | head -n1 || true)
+        LOG_FILE=$(find "$WORK_DIR/$OUT_DIR" -maxdepth 1 -name "bino-build-*.$EXT" -newer "$MARK" 2>/dev/null | head -n1 || true)
+        rm -f "$MARK"
         echo "log-file=$LOG_FILE" >> "$GITHUB_OUTPUT"
         echo "::endgroup::"
         exit $STATUS

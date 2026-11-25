@@ -69,7 +69,7 @@ jobs:
         run: test -s test/report/dist/smoke.pdf
 
   engine-and-json:
-    name: build with engine-version and json logs
+    name: unpinned report with engine-version input and json logs
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -81,7 +81,7 @@ jobs:
           engine-version: v1.0.0-next.87
           log-format: json
           execute-queries: 'true'
-          work-dir: test/report
+          work-dir: test/unpinned
       - name: Check results
         env:
           LINT_LOG: ${{ steps.bino.outputs.lint-log }}
@@ -90,7 +90,7 @@ jobs:
           case "$LINT_LOG" in *.json) ;; *) echo "lint log is not json: $LINT_LOG"; exit 1 ;; esac
           case "$BUILD_LOG" in *.json) ;; *) echo "build log is not json: $BUILD_LOG"; exit 1 ;; esac
           test -d ~/.bino/cdn/bn-template-engine/v1.0.0-next.87
-          test -s test/report/dist/smoke.pdf
+          test -s test/unpinned/dist/smoke.pdf
 
   broken:
     name: lint fails on a broken report
