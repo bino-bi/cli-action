@@ -13,7 +13,7 @@ permissions:
   contents: read
 
 env:
-  PINNED_VERSION: v0.120.0
+  PINNED_VERSION: v0.123.0
 
 jobs:
   pinned:

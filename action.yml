@@ -128,7 +128,7 @@ runs:
     - name: Restore bino binary
       id: cache
       if: ${{ inputs.cache == 'true' }}
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: ~/.local/bin/bino
         key: bino-bin-${{ runner.os }}-${{ runner.arch }}-${{ steps.resolve.outputs.tag }}
@@ -196,14 +196,14 @@ runs:
 
     - name: Restore Chrome
       if: ${{ steps.chrome.outputs.version != '' }}
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: ~/.bino/chrome-headless-shell
         key: bino-chrome-${{ runner.os }}-${{ runner.arch }}-${{ steps.chrome.outputs.version }}
 
     - name: Restore template engine
       if: ${{ inputs.cache == 'true' && (inputs.command == 'build' || inputs.command == 'both') }}
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: ~/.bino/cdn
         key: bino-engine-${{ runner.os }}-${{ inputs.engine-version }}-${{ hashFiles(format('{0}/bino.toml', inputs.work-dir)) }}

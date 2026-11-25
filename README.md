@@ -30,7 +30,7 @@ jobs:
       - name: Lint bino reports
         uses: bino-bi/cli-action@v2
         with:
-          version: v0.120.0
+          version: v0.123.0
           command: lint
           fail-on-warnings: 'true'
 ```
@@ -53,7 +53,7 @@ jobs:
       - name: Build all reports
         uses: bino-bi/cli-action@v2
         with:
-          version: v0.120.0
+          version: v0.123.0
           command: build
 
       - name: Upload artifacts
@@ -69,7 +69,7 @@ jobs:
 - name: Build selected reports
   uses: bino-bi/cli-action@v2
   with:
-    version: v0.120.0
+    version: v0.123.0
     command: build
     artefacts: 'monthly-report, weekly-summary'
     exclude-artefacts: 'draft-report'
@@ -81,7 +81,7 @@ jobs:
 - name: Lint and build
   uses: bino-bi/cli-action@v2
   with:
-    version: v0.120.0
+    version: v0.123.0
     command: both
     fail-on-warnings: 'true'
     out-dir: output
@@ -97,7 +97,7 @@ For a project without a pin, set the `engine-version` input. The action then ins
 - name: Build with a fixed engine
   uses: bino-bi/cli-action@v2
   with:
-    version: v0.120.0
+    version: v0.123.0
     command: build
     engine-version: v1.0.0-next.87
 ```
@@ -110,7 +110,7 @@ When the work dir has a `bino.lock`, the action runs `bino registry install` bef
 
 | Input | Description | Required | Default |
 |-------|-------------|----------|---------|
-| `version` | bino-cli release to install, e.g. `v0.120.0`. `latest` works but prints a warning | No | `latest` |
+| `version` | bino-cli release to install, e.g. `v0.123.0`. `latest` works but prints a warning | No | `latest` |
 | `command` | Command to run: `lint`, `build`, or `both` | **Yes** | - |
 | `work-dir` | Working directory containing report manifests | No | `.` |
 | `cache` | Cache the bino binary, Chrome headless shell and template engine between runs | No | `true` |
@@ -151,7 +151,7 @@ To disable caching:
 ```yaml
 - uses: bino-bi/cli-action@v2
   with:
-    version: v0.120.0
+    version: v0.123.0
     command: lint
     cache: 'false'
 ```
@@ -178,7 +178,7 @@ jobs:
       - name: Lint reports
         uses: bino-bi/cli-action@v2
         with:
-          version: v0.120.0
+          version: v0.123.0
           command: lint
           fail-on-warnings: 'true'
           execute-queries: 'true'
@@ -193,7 +193,7 @@ jobs:
       - name: Build reports
         uses: bino-bi/cli-action@v2
         with:
-          version: v0.120.0
+          version: v0.123.0
           command: build
           no-lint: 'true'  # Already linted in previous job
 
@@ -212,7 +212,7 @@ jobs:
   id: build
   uses: bino-bi/cli-action@v2
   with:
-    version: v0.120.0
+    version: v0.123.0
     command: build
     log-format: json
 
@@ -226,7 +226,7 @@ jobs:
 - name: Build reports from subdirectory
   uses: bino-bi/cli-action@v2
   with:
-    version: v0.120.0
+    version: v0.123.0
     command: build
     work-dir: './reports/monthly'
     out-dir: 'output'
