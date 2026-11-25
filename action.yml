@@ -191,20 +191,22 @@ runs:
       shell: bash
       run: |
         # bino setup always installs the newest stable Chrome, so the cache key follows it.
-        VERSION=$(bino setup --dry-run 2>/dev/null | sed -n 's/^ *Version: *//p' | head -n1)
-        echo "version=${VERSION:-unknown}" >> "$GITHUB_OUTPUT"
+        VERSION=$(bino setup --dry-run 2>/dev/null | sed -n 's/^ *Version: *//p' | head -n1) || true
+        echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-    - name: Restore Chrome and template engine
-      id: cache-runtime
+    - name: Restore Chrome
+      if: ${{ steps.chrome.outputs.version != '' }}
+      uses: actions/cache@v4
+      with:
+        path: ~/.bino/chrome-headless-shell
+        key: bino-chrome-${{ runner.os }}-${{ runner.arch }}-${{ steps.chrome.outputs.version }}
+
+    - name: Restore template engine
       if: ${{ inputs.cache == 'true' && (inputs.command == 'build' || inputs.command == 'both') }}
       uses: actions/cache@v4
       with:
-        path: |
-          ~/.bino/chrome-headless-shell
-          ~/.bino/cdn
-        key: bino-runtime-${{ runner.os }}-${{ runner.arch }}-chrome-${{ steps.chrome.outputs.version }}-${{ inputs.engine-version }}-${{ hashFiles(format('{0}/bino.toml', inputs.work-dir)) }}
-        restore-keys: |
-          bino-runtime-${{ runner.os }}-${{ runner.arch }}-chrome-${{ steps.chrome.outputs.version }}-
+        path: ~/.bino/cdn
+        key: bino-engine-${{ runner.os }}-${{ inputs.engine-version }}-${{ hashFiles(format('{0}/bino.toml', inputs.work-dir)) }}
 
     - name: Set up Chrome and template engine
       if: ${{ inputs.command == 'build' || inputs.command == 'both' }}
